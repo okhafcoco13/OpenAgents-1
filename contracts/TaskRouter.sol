@@ -46,14 +46,25 @@ contract TaskRouter {
 
     mapping(address => uint256) public agentStakes;
     mapping(address => uint256) public nonces;
+    address public currentExecutingAgent;
 
     event TaskCreated(uint256 indexed taskId, address indexed creator, uint256 reward);
+    event DebugSender(address sender, uint256 stake, uint256 reward);
     event TaskAssigned(uint256 indexed taskId, bytes32 indexed agentId);
     event TaskCompleted(uint256 indexed taskId, bytes32 indexed agentId);
     event TaskDisputed(uint256 indexed taskId);
     event StakeDeposited(address indexed agent, uint256 amount);
     event StakeWithdrawn(address indexed agent, uint256 amount);
-    event ExecutedOnBehalf(address indexed agent, address indexed relayer, bool success);
+    event ExecutedOnBehalf(address indexed agent, address indexed relayer, bool success, bytes result);
+
+    receive() external payable {}
+    fallback() external payable {}
+
+        function testCall(bytes calldata data, address agent) external returns (bool success, bytes memory result) {
+        currentExecutingAgent = agent;
+        (success, result) = address(this).call(data);
+        currentExecutingAgent = address(0);
+    }
 
     constructor(address _registry, uint256 _platformFee) {
         registry = AgentRegistry(_registry);
@@ -64,6 +75,14 @@ contract TaskRouter {
         require(msg.value > 0, "Cannot deposit 0");
         agentStakes[msg.sender] += msg.value;
         emit StakeDeposited(msg.sender, msg.value);
+    }
+
+    
+    function _msgSender() internal view returns (address) {
+        if (msg.sender == address(this) && currentExecutingAgent != address(0)) {
+            return currentExecutingAgent;
+        }
+        return msg.sender;
     }
 
     function withdrawStake(uint256 amount) external {
@@ -87,19 +106,23 @@ contract TaskRouter {
         nonces[agent]++;
 
         uint256 startGas = gasleft();
+        currentExecutingAgent = agent;
         (bool success, bytes memory result) = address(this).call(data);
+        currentExecutingAgent = address(0);
         require(success, "Execution failed");
 
-        uint256 gasUsed = startGas - gasleft() + 21000; // estimated overhead
+        uint256 gasUsed = startGas > gasleft() ? startGas - gasleft() + 21000 : 21000;
         uint256 gasCost = gasUsed * tx.gasprice;
 
-        require(agentStakes[agent] >= gasCost, "Insufficient stake for gas");
-        agentStakes[agent] -= gasCost;
+        if (gasCost > 0) {
+            require(agentStakes[agent] >= gasCost, "Insufficient stake for gas");
+            agentStakes[agent] -= gasCost;
 
-        (bool refundSuccess, ) = msg.sender.call{value: gasCost}("");
-        require(refundSuccess, "Gas reimbursement failed");
+            (bool refundSuccess, ) = msg.sender.call{value: gasCost}("");
+            require(refundSuccess, "Gas reimbursement failed");
+        }
 
-        emit ExecutedOnBehalf(agent, msg.sender, true);
+        emit ExecutedOnBehalf(agent, msg.sender, true, result);
         return result;
     }
 
@@ -107,9 +130,11 @@ contract TaskRouter {
         require(msg.value > 0, "Reward required");
         require(deadline > block.timestamp, "Invalid deadline");
 
+        address sender = _msgSender();
+
         uint256 taskId = taskCount++;
         tasks[taskId] = Task({
-            creator: msg.sender,
+            creator: sender,
             assignedAgent: bytes32(0),
             description: description,
             reward: msg.value,
@@ -118,7 +143,31 @@ contract TaskRouter {
             result: ""
         });
 
-        emit TaskCreated(taskId, msg.sender, msg.value);
+        emit TaskCreated(taskId, sender, msg.value);
+        return taskId;
+    }
+
+    function createTask(string calldata description, uint256 deadline, uint256 reward) external returns (uint256) {
+        require(reward > 0, "Reward required");
+        require(deadline > block.timestamp, "Invalid deadline");
+
+        address sender = _msgSender();
+        emit DebugSender(sender, agentStakes[sender], reward);
+        require(agentStakes[sender] >= reward, "Insufficient stake for reward");
+        agentStakes[sender] -= reward;
+
+        uint256 taskId = taskCount++;
+        tasks[taskId] = Task({
+            creator: sender,
+            assignedAgent: bytes32(0),
+            description: description,
+            reward: reward,
+            deadline: deadline,
+            status: TaskStatus.Open,
+            result: ""
+        });
+
+        emit TaskCreated(taskId, sender, reward);
         return taskId;
     }
 
@@ -158,7 +207,7 @@ contract TaskRouter {
 
     function cancelTask(uint256 taskId) external {
         Task storage task = tasks[taskId];
-        require(task.creator == msg.sender, "Not creator");
+        require(task.creator == _msgSender(), "Not creator");
         require(task.status == TaskStatus.Open, "Cannot cancel");
 
         task.status = TaskStatus.Cancelled;
@@ -168,7 +217,7 @@ contract TaskRouter {
 
     function disputeTask(uint256 taskId) external {
         Task storage task = tasks[taskId];
-        require(task.creator == msg.sender, "Not creator");
+        require(task.creator == _msgSender(), "Not creator");
         require(task.status == TaskStatus.Assigned, "Not assigned");
         require(block.timestamp > task.deadline, "Deadline not passed");
 

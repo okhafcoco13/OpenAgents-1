@@ -37,7 +37,7 @@ describe("TaskRouter Gas Sponsorship & executeOnBehalf", function () {
 
     // Encode createTask(string,uint256,uint256)
     const taskRouterInterface = taskRouter.interface;
-    const innerCallData = taskRouterInterface.encodeFunctionData("createTask", [
+    const innerCallData = taskRouterInterface.encodeFunctionData("createTask(string,uint256,uint256)", [
       description,
       deadline,
       reward
@@ -79,7 +79,7 @@ describe("TaskRouter Gas Sponsorship & executeOnBehalf", function () {
     const reward = ethers.parseEther("0.1");
 
     const taskRouterInterface = taskRouter.interface;
-    const innerCallData = taskRouterInterface.encodeFunctionData("createTask", [
+    const innerCallData = taskRouterInterface.encodeFunctionData("createTask(string,uint256,uint256)", [
       description,
       deadline,
       reward
@@ -120,7 +120,7 @@ describe("TaskRouter Gas Sponsorship & executeOnBehalf", function () {
     const reward = ethers.parseEther("0.1");
 
     const taskRouterInterface = taskRouter.interface;
-    const innerCallData = taskRouterInterface.encodeFunctionData("createTask", [
+    const innerCallData = taskRouterInterface.encodeFunctionData("createTask(string,uint256,uint256)", [
       description,
       deadline,
       reward
