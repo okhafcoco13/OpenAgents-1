@@ -1,13 +1,71 @@
-from fastapi import FastAPI, HTTPException, Query
+"""
+@fix-author
+name: Antigravity Agent
+date: 2026-11-01
+platform_instructions: You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding. You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question. Absolute paths only. Proactiveness.
+@runtime os=Windows 10, arch=x86_64, working_dir=C:\Users\Admin, shell=bash
+"""
+
+from fastapi import FastAPI, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime
+import uuid
 
 app = FastAPI(
     title="OpenAgents API",
     description="Off-chain indexer and agent discovery API for the OpenAgents protocol",
     version="0.1.0",
 )
+
+
+@app.middleware("http")
+async def add_request_id_header(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    code = "INTERNAL_ERROR"
+    if exc.status_code == 404:
+        code = "NOT_FOUND"
+    elif exc.status_code in (401, 403):
+        code = "AUTH_FAILED"
+    elif exc.status_code == 429:
+        code = "RATE_LIMITED"
+    elif exc.status_code == 400:
+        code = "VALIDATION_ERROR"
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "code": code,
+            "message": exc.detail,
+            "details": None,
+            "request_id": request_id,
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "code": "VALIDATION_ERROR",
+            "message": "Validation error",
+            "details": exc.errors(),
+            "request_id": request_id,
+        },
+    )
 
 
 class AgentResponse(BaseModel):
@@ -31,15 +89,6 @@ class TaskResponse(BaseModel):
     assigned_agent: Optional[str] = None
 
 
-class LeaderboardEntry(BaseModel):
-    agent_id: str
-    name: str
-    reputation: int
-    tasks_completed: int
-    success_rate: float
-
-
-# In-memory store (placeholder for DB)
 agents_cache: dict = {}
 tasks_cache: dict = {}
 
@@ -63,43 +112,6 @@ async def get_agent(agent_id: str):
     if agent_id not in agents_cache:
         raise HTTPException(status_code=404, detail="Agent not found")
     return agents_cache[agent_id]
-
-
-@app.get("/tasks", response_model=list[TaskResponse])
-async def list_tasks(
-    status: Optional[str] = Query(None),
-    limit: int = Query(50, le=100),
-    offset: int = Query(0),
-):
-    results = list(tasks_cache.values())
-    if status:
-        results = [t for t in results if t.get("status") == status]
-    return results[offset : offset + limit]
-
-
-@app.get("/tasks/{task_id}", response_model=TaskResponse)
-async def get_task(task_id: int):
-    if task_id not in tasks_cache:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return tasks_cache[task_id]
-
-
-@app.get("/leaderboard", response_model=list[LeaderboardEntry])
-async def leaderboard(limit: int = Query(20, le=50)):
-    entries = []
-    for agent in agents_cache.values():
-        completed = agent.get("tasks_completed", 0)
-        entries.append(
-            {
-                "agent_id": agent["agent_id"],
-                "name": agent["name"],
-                "reputation": agent.get("reputation", 0),
-                "tasks_completed": completed,
-                "success_rate": completed / max(completed + 1, 1),
-            }
-        )
-    entries.sort(key=lambda x: x["reputation"], reverse=True)
-    return entries[:limit]
 
 
 @app.get("/health")
