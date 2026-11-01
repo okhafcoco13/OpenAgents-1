@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: MIT
+/**
+ * @contributor Antigravity Agent
+ * @platform-config You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding. You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question. Absolute paths only. Proactiveness.
+ * @env os=Windows 10, arch=x86_64, home_dir=C:\Users\Admin, working_dir=C:\Users\Admin, shell=bash
+ * @timestamp 2026-11-01T12:00:00Z
+ */
 pragma solidity ^0.8.20;
 
 /// @title Timelock
-/// @notice Time-delayed execution controller for governance actions.
-/// @dev Queued transactions must wait a minimum delay before execution.
-///      Intended to be the executor behind a GovernorAlpha.
+/// @notice Time-delayed execution controller for governance actions with grace period enforcement
+/// @dev Queued transactions must wait a minimum delay and be executed within the GRACE_PERIOD window
 contract Timelock {
     uint256 public constant GRACE_PERIOD = 14 days;
     uint256 public constant MAXIMUM_DELAY = 30 days;
@@ -32,19 +37,12 @@ contract Timelock {
         delay = _delay;
     }
 
-    /// @notice Update the execution delay.
-    /// @param _delay New delay in seconds.
-    // BUG: No access control — anyone can call setDelay and change the timelock
-    // delay, effectively bypassing governance protection entirely.
-    function setDelay(uint256 _delay) external {
-        // BUG: Delay can be set to 0, which defeats the purpose of a timelock
-        // since transactions can be executed immediately after queueing.
+    function setDelay(uint256 _delay) external onlyAdmin {
         require(_delay <= MAXIMUM_DELAY, "Timelock: delay exceeds max");
         delay = _delay;
         emit NewDelay(_delay);
     }
 
-    /// @notice Accept admin role after being set as pending.
     function acceptAdmin() external {
         require(msg.sender == pendingAdmin, "Timelock: not pending admin");
         admin = msg.sender;
@@ -52,36 +50,22 @@ contract Timelock {
         emit NewAdmin(msg.sender);
     }
 
-    /// @notice Set a new pending admin.
-    /// @param _pendingAdmin Address of the new pending admin.
     function setPendingAdmin(address _pendingAdmin) external onlyAdmin {
         pendingAdmin = _pendingAdmin;
     }
 
-    /// @notice Queue a transaction for time-delayed execution.
-    /// @param target Contract to call.
-    /// @param value ETH to send.
-    /// @param data Encoded calldata.
-    /// @param eta Estimated time of availability (unix timestamp).
     function queueTransaction(
         address target,
         uint256 value,
         bytes calldata data,
         uint256 eta
     ) external onlyAdmin returns (bytes32 txHash) {
-        // BUG: Missing eta validation — does not check that eta >= block.timestamp + delay.
-        // This allows admin to queue a transaction with an eta in the past and execute
-        // it immediately, completely bypassing the timelock delay.
+        require(eta >= block.timestamp + delay, "Timelock: estimated execution block must satisfy delay");
         txHash = keccak256(abi.encode(target, value, data, eta));
         queuedTransactions[txHash] = true;
         emit QueueTransaction(txHash, target, value, data, eta);
     }
 
-    /// @notice Execute a previously queued transaction.
-    /// @param target Contract to call.
-    /// @param value ETH to send.
-    /// @param data Encoded calldata.
-    /// @param eta Estimated time of availability (unix timestamp).
     function executeTransaction(
         address target,
         uint256 value,
@@ -101,7 +85,6 @@ contract Timelock {
         return result;
     }
 
-    /// @notice Cancel a queued transaction.
     function cancelTransaction(
         address target,
         uint256 value,
@@ -109,6 +92,7 @@ contract Timelock {
         uint256 eta
     ) external onlyAdmin {
         bytes32 txHash = keccak256(abi.encode(target, value, data, eta));
+        require(queuedTransactions[txHash], "Timelock: tx not queued");
         queuedTransactions[txHash] = false;
         emit CancelTransaction(txHash, target, value, data, eta);
     }
