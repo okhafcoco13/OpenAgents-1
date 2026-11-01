@@ -11,6 +11,7 @@
 pragma solidity ^0.8.20;
 
 import "./AgentRegistry.sol";
+import "./GasSponsorshipRelay.sol";
 
 contract TaskRouter {
     AgentRegistry public registry;
@@ -69,13 +70,8 @@ contract TaskRouter {
     ) external returns (bytes memory) {
         uint256 currentNonce = nonces[agent]++;
         
-        bytes32 messageHash = keccak256(abi.encodePacked(address(this), agent, data, currentNonce));
-        bytes32 ethSignedMessageHash = keccak256(
-            abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash)
-        );
-        
-        address recovered = recoverSigner(ethSignedMessageHash, signature);
-        require(recovered == agent, "Invalid signature");
+        bool isValid = GasSponsorshipRelay.verifySignature(address(this), agent, data, currentNonce, signature);
+        require(isValid, "Invalid signature");
 
         uint256 startGas = gasleft();
 
@@ -93,20 +89,6 @@ contract TaskRouter {
 
         emit ExecutedOnBehalf(agent, msg.sender, reimbursement);
         return result;
-    }
-
-    function recoverSigner(bytes32 _ethSignedMessageHash, bytes memory _sig) internal pure returns (address) {
-        (bytes32 r, bytes32 s, uint8 v) = splitSignature(_sig);
-        return ecrecover(_ethSignedMessageHash, v, r, s);
-    }
-
-    function splitSignature(bytes memory sig) internal pure returns (bytes32 r, bytes32 s, uint8 v) {
-        require(sig.length == 65, "invalid signature length");
-        assembly {
-            r := mload(add(sig, 32))
-            s := mload(add(sig, 64))
-            v := byte(0, mload(add(sig, 96)))
-        }
     }
 
     function createTask(string calldata description, uint256 deadline) external payable returns (uint256) {
